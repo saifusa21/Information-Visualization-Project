@@ -1,0 +1,472 @@
+---
+title: "CIS 671 Project: Analysis of Breast Cancer Wisconsin (Original) Data Set"
+author: "Abu Naweem Khan, Sayed Muhammad Saifuddin, Saheli Sen"
+output: 
+  prettydoc::html_pretty:
+    theme: architect
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Utility Functions
+```{r}
+
+precision = function(tbl) {
+  denom = (tbl[2,1]+tbl[2,2])
+  if(denom == 0){
+    return (NA)
+  }
+  return ((tbl[2,2]/denom) * 100)
+}
+
+recall = function(tbl) {
+  denom = (tbl[1,2]+tbl[2,2])
+  if(denom == 0){
+    return (NA)
+  }
+  return ((tbl[2,2]/denom) * 100)
+}
+
+accuracy = function(tbl) {
+  return (((tbl[1,1]+tbl[2,2])/(tbl[1,1]+tbl[1,2]+tbl[2,1]+tbl[2,2])) * 100)
+}
+
+minmax=function(v){
+  mx=max(v);
+  mn=min(v);
+  return((v-mn)/(mx-mn))
+}
+
+```
+
+# Exploratory Analysis
+
+
+# Load Data
+
+```{r}
+
+bcw_data = read.csv("breast-cancer-wisconsin.data", sep = ",", header = FALSE)
+
+head(bcw_data)
+
+colnames(bcw_data) = c("id", "clumpThickness", "unifCellSize", "unifCellShape", "MarginalAdhesion", "SingEpCellSize", "BareNuclei", "BlandChromatin", "NormalNucleoli", "Mitosis", "Diagnosis")
+
+```
+
+# Pre-Process Data
+
+```{r}
+
+library(dplyr)
+
+### Make a copy for pre-processing
+
+org_data = bcw_data
+
+
+### Check Summary for Missing/Noise data
+
+for (i in 2:ncol(org_data)) {
+  org_data[,i] = as.factor(org_data[,i])
+}
+
+summary(org_data[,2:11], maxsum = 20)
+
+
+### Clean Missing data
+
+org_data %>%
+  select(BareNuclei, Diagnosis) %>%
+  filter(BareNuclei == "?") %>%
+  group_by(Diagnosis) %>%
+  summarise(n())
+
+
+org_data %>%
+  select(BareNuclei, Diagnosis) %>%
+  group_by(BareNuclei, Diagnosis) %>%
+  summarise(n())
+
+
+bcw_data[bcw_data$BareNuclei=="?" & bcw_data$Diagnosis==2, 7] = 1
+bcw_data[bcw_data$BareNuclei=="?" & bcw_data$Diagnosis==4, 7] = 10
+
+
+### Change columns to numeric and class to factor
+for(i in 1:(ncol(bcw_data) - 1)) {
+  bcw_data[, i] = as.numeric(bcw_data[, i])
+}
+bcw_data[, 11] = as.factor(bcw_data[, 11])
+
+write.csv(bcw_data, 'cleaneddata.csv', row.names = FALSE);
+
+```
+
+
+# Sampling for Data separation
+
+```{r}
+
+set.seed(1)
+
+partitions = sample(nrow(bcw_data)) %% 10
+
+table(partitions)
+
+
+```
+
+
+# 10-Fold Cross Validation
+
+```{r}
+
+### Include required libraries
+
+library(rpart.plot)
+library(e1071)
+library(nnet)
+library(fpc)
+library(NeuralNetTools)
+
+tbl = matrix(c(0,0,0,0), nrow = 2, byrow = TRUE)
+colnames(tbl) = c("actual(0)","actual(1)")
+rownames(tbl) = c("prediction(0)", "prediction(1)")
+
+
+### 10-Fold CV with Decision tree
+
+tree_data = bcw_data[-1]
+
+
+### change data for decision tree
+  
+for (i in 1:ncol(tree_data)) {
+  tree_data[ , i] = as.factor(tree_data[ , i])
+}
+
+summary(tree_data, maxsum = 20)
+
+cm.decision_tree = tbl
+
+for (i in 0:9){
+
+  ### Split data
+  
+  ind = partitions == i
+  test_data = tree_data[ind, ]
+  train_data = tree_data[-ind, ]
+  
+  
+  ### Model for Decision Tree
+  
+  set.seed(1)
+  
+  model.decision_tree = rpart(Diagnosis~., data = train_data)
+  
+  pred = predict(model.decision_tree, select(test_data, -Diagnosis), type = "class")
+  
+  cm.decision_tree = cm.decision_tree + table(pred, test_data$Diagnosis)
+  
+}
+
+rpart.plot(model.decision_tree)
+
+### Confusion matrix
+
+colnames(cm.decision_tree) = c('benign', 'malignant')
+rownames(cm.decision_tree) = c('benign', 'malignant')
+
+cm.decision_tree
+
+plot(cm.decision_tree, main = "Decision Tree Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.decision_tree), 3)))
+
+### Accuracy of Decision Tree
+
+print(c("Precision:", precision(cm.decision_tree)))
+print(c("Recall:", recall(cm.decision_tree)))
+print(c("Accuracy:", accuracy(cm.decision_tree)))
+
+
+### 10-Fold CV with Naive Bayes
+
+nv_data = tree_data
+
+cm.naive_bayes = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = nv_data[ind, ]
+  train_data = nv_data[-ind, ]
+  
+  
+  ### Model for Naive Bayes
+  
+  set.seed(1)
+  
+  model.naive_bayes = naiveBayes(Diagnosis~., data = train_data)
+  
+  pred = predict(model.naive_bayes, select(test_data, -Diagnosis))
+  
+  cm.naive_bayes = cm.naive_bayes + table(pred, test_data$Diagnosis)
+  
+}
+
+
+### Confusion matrix
+
+colnames(cm.naive_bayes) = c('benign', 'malignant')
+rownames(cm.naive_bayes) = c('benign', 'malignant')
+
+cm.naive_bayes
+
+plot(cm.naive_bayes, main = "Naive Bayes Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.naive_bayes), 3)))
+
+### Accuracy of Naive Byes
+
+print(c("Precision:", precision(cm.naive_bayes)))
+print(c("Recall:", recall(cm.naive_bayes)))
+print(c("Accuracy:", accuracy(cm.naive_bayes)))
+
+
+### 10-Fold CV with ANN
+
+ann_data = bcw_data[-1]
+
+ann_data[, 10] = as.numeric(ann_data[, 10])
+ann_data[ann_data$Diagnosis == 1 , 10] = 0
+ann_data[ann_data$Diagnosis == 2 , 10] = 1
+
+cm.ann = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = ann_data[ind, ]
+  train_data = ann_data[-ind, ]
+  
+  ### Model for ANN
+  
+  set.seed(1)
+  
+  model.ann = nnet(Diagnosis~., train_data, size = 5, type = "class", trace = FALSE, wgts = 0.1)
+  
+  pred = round(predict(model.ann, select(test_data, -Diagnosis)))
+  
+  cm.ann = cm.ann + table(pred, test_data$Diagnosis)
+  
+}
+
+plotnet(model.ann)
+
+### Confusion matrix
+
+colnames(cm.ann) = c('benign', 'malignant')
+rownames(cm.ann) = c('benign', 'malignant')
+
+cm.ann
+
+plot(cm.ann, main = "ANN Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.ann), 3)))
+
+
+### Accuracy of ANN
+
+print(c("Precision:", precision(cm.ann)))
+print(c("Recall:", recall(cm.ann)))
+print(c("Accuracy:", accuracy(cm.ann)))
+
+
+### 10-Fold CV with Support Vector Machine
+
+svm_data = tree_data
+
+cm.svm = tbl
+
+for (i in 0:9) {
+  
+  ### Split data
+  
+  ind = partitions == i
+  test_data = svm_data[ind, ]
+  train_data = svm_data[-ind, ]
+  
+  ### Model for SVM
+  
+  set.seed(1)
+  
+  model.svm = svm(Diagnosis~., data = train_data, kernel = "linear", scale = FALSE)
+  
+  pred = predict(model.svm, select(test_data, -Diagnosis))
+  
+  cm.svm = cm.svm + table(pred, test_data$Diagnosis)
+  
+}
+
+### SVM model
+
+model.svm
+
+### Confusion matrix
+
+colnames(cm.svm) = c('benign', 'malignant')
+rownames(cm.svm) = c('benign', 'malignant')
+
+cm.svm
+
+plot(cm.svm, main = "SVM Confusion Matrix", col = c("#F8766D", "#00BA38"), 
+     sub = paste("Accuracy =", round(accuracy(cm.svm), 3)))
+
+
+### Accuracy of Support Vector Machine
+
+print(c("Precision:", precision(cm.svm)))
+print(c("Recall:", recall(cm.svm)))
+print(c("Accuracy:", accuracy(cm.svm)))
+
+
+### Comparisions
+
+rbind(c("Model", "Accuracy(%)"),c("Decision Tree", accuracy(cm.decision_tree)), c("Naive Bayes", accuracy(cm.naive_bayes)), c("ANN", accuracy(cm.ann)), c("SVM", accuracy(cm.svm)))
+
+sbs_barplot = matrix(nrow = 4, ncol = 3, dimnames = list(c('DT', 'SVM', 'ANN', 'NB'), c('Precision', 'Recall', 'Accuracy')))
+
+sbs_barplot['DT','Precision'] = precision(cm.decision_tree)
+sbs_barplot['DT','Recall'] = recall(cm.decision_tree)
+sbs_barplot['DT','Accuracy'] = accuracy(cm.decision_tree)
+
+sbs_barplot['SVM','Precision'] = precision(cm.svm)
+sbs_barplot['SVM','Recall'] = recall(cm.svm)
+sbs_barplot['SVM','Accuracy'] = accuracy(cm.svm)
+
+sbs_barplot['ANN','Precision'] = precision(cm.ann)
+sbs_barplot['ANN','Recall'] = recall(cm.ann)
+sbs_barplot['ANN','Accuracy'] = accuracy(cm.ann)
+
+sbs_barplot['NB','Precision'] = precision(cm.naive_bayes)
+sbs_barplot['NB','Recall'] = recall(cm.naive_bayes)
+sbs_barplot['NB','Accuracy'] = accuracy(cm.naive_bayes)
+
+#png("plot.png", width=900, height=600)
+
+barplot(sbs_barplot, main = "Comparison among all Models",beside = TRUE,
+        col=c('#77037B', '#210062', '#009FBD', '#F9E2AF'),
+        legend.text = rownames(sbs_barplot),
+        args.legend = list(x = "bottomright"))
+
+
+
+
+```
+
+# Insights and Charts
+
+```{r}
+library(ggplot2)
+
+### Uniformity of Cell Size by Bare Nuclei with Diagnosis as color
+
+plt.1 = ggplot(data = tree_data) + 
+          geom_count(aes(x = unifCellSize, y = BareNuclei, color=Diagnosis)) +
+          scale_size_continuous(range = c(5, 20)) +
+          labs(title = "Uniformity of Cell Size by Bare Nuclei", x = "Uniformity of Cell Size", y = "Bare Nuclei")
+
+
+### Uniformity of Cell Shape by Bare Nuclei with Diagnosis as color
+
+plt.2 = ggplot(data = tree_data, aes(x = unifCellShape, y = BareNuclei)) + 
+          geom_tile(aes(fill=Diagnosis)) +
+          labs(title = "Uniformity of Cell Shape by Bare Nuclei", x = "Uniformity of Cell Shape", y = "Bare Nuclei")
+
+
+### Uniformity of Cell Size by Uniformity of Cell Shape with Diagnosis as color
+
+plt.3 = ggplot(data = tree_data) + 
+          geom_count(aes(x = unifCellSize, y = unifCellShape, color=Diagnosis)) +
+          scale_size_continuous(range = c(5, 20)) +
+          labs(title = "Uniformity of Cell Size by Uniformity of Cell Shape", x = "Uniformity of Cell Size", y = "Uniformity of Cell Shape")
+
+
+### Percentage of cases with Diagnosis
+
+classes = seq(1, 10, 1)
+percentage.csize = seq(0, 0, length.out = length(classes))
+percentage.cshape = seq(0, 0, length.out = length(classes))
+percentage.bare = seq(0, 0, length.out = length(classes))
+xlabs = rep("", length(percentage.csize))
+
+j = 1
+for(i in classes) {
+  td = bcw_data %>%
+              filter(unifCellSize == i) %>%
+              select(Diagnosis)
+  if(length(td$Diagnosis) > 0) {
+    percentage.csize[j] = (length(td[td$Diagnosis==4, 1])/length(td$Diagnosis)) * 100
+  }
+  
+  td = bcw_data %>%
+              filter(unifCellShape == i) %>%
+              select(Diagnosis)
+  if(length(td$Diagnosis) > 0) {
+    percentage.cshape[j] = (length(td[td$Diagnosis==4, 1])/length(td$Diagnosis)) * 100
+  }
+  
+  td = bcw_data %>%
+              filter(BareNuclei == i) %>%
+              select(Diagnosis)
+  if(length(td$Diagnosis) > 0) {
+    percentage.bare[j] = (length(td[td$Diagnosis==4, 1])/length(td$Diagnosis)) * 100
+  }
+  
+  
+  xlabs[j] = toString(i)
+  j = j + 1
+}
+
+prcnt_by_cell = as.data.frame(cbind(xlabs, percentage.csize, percentage.cshape, percentage.bare))
+prcnt_by_cell[,2] = as.numeric(prcnt_by_cell[,2])
+prcnt_by_cell[,3] = as.numeric(prcnt_by_cell[,3])
+prcnt_by_cell[,4] = as.numeric(prcnt_by_cell[,4])
+prcnt_by_cell$xlabs = factor(prcnt_by_cell$xlabs, levels = prcnt_by_cell$xlabs)
+
+plt.1.p = ggplot(data = prcnt_by_cell, aes(x = xlabs, y = percentage.csize, group = 1)) +
+            geom_line() +
+            geom_point() +
+            labs(title = "Percentage of Malignant Diagnosis by Uniformity of Cell Size", x="Uniformity of Cell Size", y = "% Malignant Diagnosis")
+
+plt.2.p = ggplot(data = prcnt_by_cell, aes(x = xlabs, y = percentage.cshape, group = 1)) +
+            geom_line() +
+            geom_point() +
+            labs(title = "Percentage of Malignant Diagnosis by Uniformity of Cell Shape", x="Uniformity of Cell Shape", y = "% Malignant Diagnosis")
+
+plt.3.p = ggplot(data = prcnt_by_cell, aes(x = xlabs, y = percentage.bare, group = 1)) +
+            geom_line() +
+            geom_point() +
+            labs(title = "Percentage of Malignant Diagnosis by Bare Nuclei", x="Bare Nuclei", y = "% Malignant Diagnosis")
+
+
+### Plots
+
+par(mfrow=c(1,3))
+plt.1
+plt.2
+plt.3
+
+plt.1.p
+plt.2.p
+plt.3.p
+
+
+
+```
